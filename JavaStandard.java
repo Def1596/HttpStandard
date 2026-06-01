@@ -2,6 +2,7 @@ import com.sun.net.httpserver.Headers;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
+import com.google.gson.Gson;
 
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
@@ -14,13 +15,14 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 public final class JavaStandard {
+    private static final Gson GSON = new Gson();
+
     /**
      * Prevents creating JavaStandard as an object.
      * This class only groups utility classes and small HTTP/Servlet helpers.
@@ -40,7 +42,10 @@ public final class JavaStandard {
          * @return parsed Java value, or null when the input is empty.
          */
         public static Object parse(String json) {
-            return new JsonParser(json).parse();
+            if (json == null || json.trim().isEmpty()) {
+                return null;
+            }
+            return GSON.fromJson(json, Object.class);
         }
 
         /**
@@ -53,43 +58,7 @@ public final class JavaStandard {
          * @return JSON string that can be sent back to the exe or another client.
          */
         public static String toJson(Object value) {
-            if (value == null) {
-                return "null";
-            }
-            if (value instanceof String) {
-                return "\"" + escape((String) value) + "\"";
-            }
-            if (value instanceof Number || value instanceof Boolean) {
-                return String.valueOf(value);
-            }
-            if (value instanceof Map) {
-                StringBuilder builder = new StringBuilder("{");
-                boolean first = true;
-                for (Object entryObject : ((Map<?, ?>) value).entrySet()) {
-                    Map.Entry<?, ?> entry = (Map.Entry<?, ?>) entryObject;
-                    if (!first) {
-                        builder.append(',');
-                    }
-                    builder.append(toJson(String.valueOf(entry.getKey())));
-                    builder.append(':');
-                    builder.append(toJson(entry.getValue()));
-                    first = false;
-                }
-                return builder.append('}').toString();
-            }
-            if (value instanceof Iterable) {
-                StringBuilder builder = new StringBuilder("[");
-                boolean first = true;
-                for (Object item : (Iterable<?>) value) {
-                    if (!first) {
-                        builder.append(',');
-                    }
-                    builder.append(toJson(item));
-                    first = false;
-                }
-                return builder.append(']').toString();
-            }
-            return toJson(String.valueOf(value));
+            return GSON.toJson(value);
         }
 
         /**
@@ -226,19 +195,6 @@ public final class JavaStandard {
             return current;
         }
 
-        /**
-         * Escapes characters that must be protected inside a JSON string.
-         *
-         * @param value raw Java string.
-         * @return JSON-safe string content without surrounding quotes.
-         */
-        private static String escape(String value) {
-            return value.replace("\\", "\\\\")
-                    .replace("\"", "\\\"")
-                    .replace("\r", "\\r")
-                    .replace("\n", "\\n")
-                    .replace("\t", "\\t");
-        }
     }
 
     // Reads small text files such as test.JSON.
@@ -679,181 +635,4 @@ public final class JavaStandard {
         }
     }
 
-    // Minimal JSON parser used to avoid an external library dependency.
-    private static final class JsonParser {
-        private final String text;
-        private int index;
-
-        /**
-         * Creates a parser for one JSON document.
-         *
-         * @param text JSON text. Null is treated as an empty string.
-         */
-        JsonParser(String text) {
-            this.text = text == null ? "" : text;
-        }
-
-        /**
-         * Parses the JSON document from the beginning.
-         *
-         * @return parsed Java value.
-         */
-        Object parse() {
-            Object value = readValue();
-            skipSpaces();
-            return value;
-        }
-
-        /**
-         * Reads the next JSON value at the current index.
-         *
-         * @return parsed object, array, string, number, boolean, null, or raw text fallback.
-         */
-        private Object readValue() {
-            skipSpaces();
-            if (index >= text.length()) {
-                return null;
-            }
-            char ch = text.charAt(index);
-            if (ch == '{') {
-                return readObject();
-            }
-            if (ch == '[') {
-                return readArray();
-            }
-            if (ch == '"') {
-                return readString();
-            }
-            if (text.startsWith("true", index)) {
-                index += 4;
-                return Boolean.TRUE;
-            }
-            if (text.startsWith("false", index)) {
-                index += 5;
-                return Boolean.FALSE;
-            }
-            if (text.startsWith("null", index)) {
-                index += 4;
-                return null;
-            }
-            return readNumberOrText();
-        }
-
-        /**
-         * Reads a JSON object and stores keys in insertion order.
-         *
-         * @return map containing object fields.
-         */
-        private Map<String, Object> readObject() {
-            Map<String, Object> map = new LinkedHashMap<String, Object>();
-            index++;
-            skipSpaces();
-            while (index < text.length() && text.charAt(index) != '}') {
-                String key = readString();
-                skipSpaces();
-                if (index < text.length() && text.charAt(index) == ':') {
-                    index++;
-                }
-                map.put(key, readValue());
-                skipSpaces();
-                if (index < text.length() && text.charAt(index) == ',') {
-                    index++;
-                    skipSpaces();
-                }
-            }
-            if (index < text.length() && text.charAt(index) == '}') {
-                index++;
-            }
-            return map;
-        }
-
-        /**
-         * Reads a JSON array.
-         *
-         * @return list containing array items.
-         */
-        private List<Object> readArray() {
-            List<Object> list = new ArrayList<Object>();
-            index++;
-            skipSpaces();
-            while (index < text.length() && text.charAt(index) != ']') {
-                list.add(readValue());
-                skipSpaces();
-                if (index < text.length() && text.charAt(index) == ',') {
-                    index++;
-                    skipSpaces();
-                }
-            }
-            if (index < text.length() && text.charAt(index) == ']') {
-                index++;
-            }
-            return list;
-        }
-
-        /**
-         * Reads a JSON string, including common escape sequences.
-         *
-         * @return unescaped Java string.
-         */
-        private String readString() {
-            StringBuilder builder = new StringBuilder();
-            if (index < text.length() && text.charAt(index) == '"') {
-                index++;
-            }
-            while (index < text.length()) {
-                char ch = text.charAt(index++);
-                if (ch == '"') {
-                    break;
-                }
-                if (ch == '\\' && index < text.length()) {
-                    char next = text.charAt(index++);
-                    if (next == 'n') {
-                        builder.append('\n');
-                    } else if (next == 'r') {
-                        builder.append('\r');
-                    } else if (next == 't') {
-                        builder.append('\t');
-                    } else {
-                        builder.append(next);
-                    }
-                } else {
-                    builder.append(ch);
-                }
-            }
-            return builder.toString();
-        }
-
-        /**
-         * Reads a number when possible, otherwise returns raw text.
-         *
-         * This fallback keeps the simple parser tolerant of unquoted tokens.
-         *
-         * @return Long, Double, or String.
-         */
-        private Object readNumberOrText() {
-            int start = index;
-            while (index < text.length()
-                    && ",]} \r\n\t".indexOf(text.charAt(index)) < 0) {
-                index++;
-            }
-            String value = text.substring(start, index);
-            try {
-                if (value.indexOf('.') >= 0) {
-                    return Double.valueOf(value);
-                }
-                return Long.valueOf(value);
-            } catch (NumberFormatException e) {
-                return value;
-            }
-        }
-
-        /**
-         * Moves the parser index past whitespace.
-         */
-        private void skipSpaces() {
-            while (index < text.length() && Character.isWhitespace(text.charAt(index))) {
-                index++;
-            }
-        }
-    }
 }
